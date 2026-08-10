@@ -11,7 +11,8 @@ struct ToolExecutor {
             parameters: Schema(
                 type: "OBJECT",
                 properties: [
-                    "command": Schema(type: "STRING", description: "The command to run in bash/zsh")
+                    "command": Schema(type: "STRING", description: "The command to run in bash/zsh"),
+                    "timeout_seconds": Schema(type: "INTEGER", description: "Optional timeout in seconds (default 600, max 3600). Set higher for long-running operations like docker builds or package installs.")
                 ],
                 required: ["command"]
             )
@@ -116,7 +117,13 @@ struct ToolExecutor {
         switch name {
         case "run_command":
             guard let command = args["command"]?.stringValue else { return "Error: Missing command" }
-            return await runCommand(command, cwd: cwd, conversationId: conversationId, useSandbox: useSandbox)
+            let rawTimeout: Double = switch args["timeout_seconds"] {
+            case .int(let i): Double(i)
+            case .double(let d): d
+            default: 600
+            }
+            let timeoutSeconds = min(max(rawTimeout, 10), 3600)
+            return await runCommand(command, cwd: cwd, conversationId: conversationId, useSandbox: useSandbox, timeoutSeconds: timeoutSeconds)
         case "read_file":
             guard let path = args["path"]?.stringValue else { return "Error: Missing path" }
             return await readFile(path, cwd: cwd)
@@ -160,7 +167,7 @@ struct ToolExecutor {
         }
     }
     
-    private func runCommand(_ command: String, cwd: String?, conversationId: UUID? = nil, useSandbox: Bool = false) async -> String {
+    private func runCommand(_ command: String, cwd: String?, conversationId: UUID? = nil, useSandbox: Bool = false, timeoutSeconds: Double = 600) async -> String {
         if useSandbox, let conversationId {
             guard SandboxingManager.shared.isContainerInstalled else {
                 return "Error: sandboxing is on but the container runtime isn't installed. Open Iris Settings → Sandboxing to install it, or turn sandboxing off."
@@ -168,64 +175,85 @@ struct ToolExecutor {
             let expandedCwd = cwd.map { ($0 as NSString).expandingTildeInPath }
             return await SandboxSessionManager.shared.run(command: command, conversationId: conversationId, workspace: expandedCwd)
         }
-        return await withCheckedContinuation { continuation in
-            let process = Process()
-            let outputPipe = Pipe()
-            let errorPipe = Pipe()
-            if useSandbox {
-                guard let containerPath = SandboxingManager.shared.containerBinaryPath else {
-                    continuation.resume(returning: "Error: sandboxing is on but the container runtime isn't installed. Open Iris Settings → Sandboxing to install it, or turn sandboxing off.")
-                    return
-                }
-                process.executableURL = URL(fileURLWithPath: containerPath)
-                var containerArgs = ["run", "--rm", ConfigManager.shared.sandboxImage, "bash", "-c", command]
-                if let cwd = cwd {
-                    let expandedPath = (cwd as NSString).expandingTildeInPath
-                    containerArgs.insert(contentsOf: ["-v", "\(expandedPath):\(expandedPath)", "--workdir", expandedPath], at: 2)
-                }
-                process.arguments = containerArgs
-            } else {
-                process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-                process.arguments = ["-c", command]
-                if let cwd = cwd {
-                    process.currentDirectoryURL = URL(fileURLWithPath: (cwd as NSString).expandingTildeInPath)
-                }
+        // Hoist process/pipes so the cancellation handler can capture them.
+        let process = Process()
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        if useSandbox {
+            guard let containerPath = SandboxingManager.shared.containerBinaryPath else {
+                return "Error: sandboxing is on but the container runtime isn't installed. Open Iris Settings → Sandboxing to install it, or turn sandboxing off."
             }
-            
-            process.standardOutput = outputPipe
-            process.standardError = errorPipe
-            
-            process.terminationHandler = { proc in
-                let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-                
-                var result = ""
-                if let outputStr = String(data: outputData, encoding: .utf8), !outputStr.isEmpty {
-                    result += outputStr
-                }
-                if let errorStr = String(data: errorData, encoding: .utf8), !errorStr.isEmpty {
-                    result += "\nStderr: " + errorStr
-                }
+            process.executableURL = URL(fileURLWithPath: containerPath)
+            var containerArgs = ["run", "--rm", ConfigManager.shared.sandboxImage, "bash", "-c", command]
+            if let cwd = cwd {
+                let expandedPath = (cwd as NSString).expandingTildeInPath
+                containerArgs.insert(contentsOf: ["-v", "\(expandedPath):\(expandedPath)", "--workdir", expandedPath], at: 2)
+            }
+            process.arguments = containerArgs
+        } else {
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            process.arguments = ["-c", command]
+            if let cwd = cwd {
+                process.currentDirectoryURL = URL(fileURLWithPath: (cwd as NSString).expandingTildeInPath)
+            }
+        }
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
 
-                // When sandboxing is on and the `container` runtime failed to start the command
-                // (not provisioned: services down or no VM kernel), it emits opaque errors like
-                // "unauthorized request". Rewrite those to an actionable message so the model and
-                // user aren't left guessing (which previously led to confabulated "auth wall"
-                // explanations).
-                if useSandbox, proc.terminationStatus != 0,
-                   let hint = Self.sandboxSetupHint(for: result) {
-                    continuation.resume(returning: hint)
-                    return
-                }
+        do {
+            return try await withTimeout(seconds: timeoutSeconds) {
+                await withTaskCancellationHandler {
+                    await withCheckedContinuation { continuation in
+                        process.terminationHandler = { proc in
+                            // Kill direct children before reading pipes. Child processes that
+                            // inherited these pipe file descriptors (e.g. a CLI plugin spawned
+                            // by the main process) keep the write end open after the parent dies,
+                            // causing readDataToEndOfFile() to block until they exit too.
+                            let killer = Process()
+                            killer.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+                            killer.arguments = ["-9", "-P", String(proc.processIdentifier)]
+                            killer.standardOutput = FileHandle.nullDevice
+                            killer.standardError = FileHandle.nullDevice
+                            try? killer.run()
+                            killer.waitUntilExit()
 
-                continuation.resume(returning: result.isEmpty ? "Success" : result)
+                            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+
+                            var result = ""
+                            if let outputStr = String(data: outputData, encoding: .utf8), !outputStr.isEmpty {
+                                result += outputStr
+                            }
+                            if let errorStr = String(data: errorData, encoding: .utf8), !errorStr.isEmpty {
+                                result += "\nStderr: " + errorStr
+                            }
+
+                            // When sandboxing is on and the `container` runtime failed to start the command
+                            // (not provisioned: services down or no VM kernel), it emits opaque errors like
+                            // "unauthorized request". Rewrite those to an actionable message so the model and
+                            // user aren't left guessing (which previously led to confabulated "auth wall"
+                            // explanations).
+                            if useSandbox, proc.terminationStatus != 0,
+                               let hint = Self.sandboxSetupHint(for: result) {
+                                continuation.resume(returning: hint)
+                                return
+                            }
+
+                            continuation.resume(returning: result.isEmpty ? "Success" : result)
+                        }
+
+                        do {
+                            try process.run()
+                        } catch {
+                            continuation.resume(returning: "Error executing command: \(error.localizedDescription)")
+                        }
+                    }
+                } onCancel: {
+                    process.terminate()
+                }
             }
-            
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(returning: "Error executing command: \(error.localizedDescription)")
-            }
+        } catch {
+            return "Error: command timed out after \(Int(timeoutSeconds)) seconds"
         }
     }
     
