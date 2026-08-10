@@ -27,7 +27,7 @@ struct ChatView: View {
             VStack {
                 List(selection: $state.selectedConversationId) {
                     Section(header: Text("Conversations").font(.caption.weight(.bold)).foregroundColor(.secondary).padding(.bottom, 4)) {
-                        ForEach(state.conversations) { conv in
+                        ForEach(state.conversations.filter { !$0.isSubagent }) { conv in
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(conv.title)
