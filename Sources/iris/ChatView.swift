@@ -1081,4 +1081,9 @@ struct SlashCommandAutoCompleteView: View {
     }
 }
 
-
+func formatDuration(_ t: TimeInterval) -> String {
+    let s = Int(t)
+    if s < 60   { return "\(s)s" }
+    if s < 3600 { return "\(s / 60)m \(s % 60)s" }
+    return "\(s / 3600)h \(s % 3600 / 60)m"
+}
