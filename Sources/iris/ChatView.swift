@@ -116,12 +116,12 @@ struct ChatView: View {
                                 HStack(spacing: 8) {
                                     TypingIndicator()
                                     Text("Iris is thinking...")
-                                        .font(.caption)
+                                        .font(.callout)
                                         .foregroundColor(.secondary)
 
                                     Button(action: { state.interruptActiveConversation() }) {
                                         Label("Stop", systemImage: "stop.circle.fill")
-                                            .font(.caption)
+                                            .font(.callout)
                                     }
                                     .buttonStyle(.plain)
                                     .foregroundColor(.secondary)
@@ -768,7 +768,7 @@ struct SystemGroupView: View {
                     Image(systemName: "gearshape.fill")
                     Text(headerText)
                 }
-                .font(.caption.bold())
+                .font(.callout.weight(.bold))
                 .foregroundColor(.secondary)
 
                 if isExpanded || messages.count == 1 {
@@ -781,7 +781,7 @@ struct SystemGroupView: View {
                     .padding(.leading, 22)
                 } else if let status = collapsedStatus {
                     Text(status)
-                        .font(.caption)
+                        .font(.callout)
                         .foregroundColor(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
