@@ -23,16 +23,20 @@ enum InstallWizardSource: Identifiable {
 /// because it's only ever touched from UI-driven `Task { @MainActor ... }` work.
 @MainActor
 enum LegacyFileWatchSuppressor {
-    private static var suppressed = false
+    private static var suppressedAt: Date?
 
     /// Call immediately before a self-inflicted write to mcp_servers.json.
-    static func suppressNext() { suppressed = true }
+    static func suppressNext() { suppressedAt = Date() }
 
     /// Called by the watcher's handler; returns true (and clears the flag) exactly once per
     /// `suppressNext()` call, so a genuine follow-up hand-edit still triggers a normal reload.
+    /// The flag expires after 3 seconds: if the watcher tick for a self-inflicted write never
+    /// arrives (FSEvents coalescing, watcher not running), a stale flag must not swallow a
+    /// genuine hand-edit minutes later. Either way the flag is cleared.
     static func consumeSuppression() -> Bool {
-        defer { suppressed = false }
-        return suppressed
+        defer { suppressedAt = nil }
+        guard let suppressedAt else { return false }
+        return Date().timeIntervalSince(suppressedAt) < 3
     }
 }
 
@@ -78,6 +82,11 @@ struct PluginsSettingsView: View {
                 await refresh()
                 continue
             }
+            // Push fresh plugin configs before the fleet restart: reloadServers() restarts
+            // from MCPManager's stored plugin configs, and stale state here would resurrect
+            // servers (with expanded secrets) of plugins uninstalled since the last push.
+            await PluginManager.shared.loadAll()
+            await MCPManager.shared.setPluginConfigs(await PluginManager.shared.mcpConfigs())
             await MCPManager.shared.reloadServers()
             await refresh()
         }
@@ -331,6 +340,9 @@ struct PluginDetailView: View {
                         Task {
                             try? await PluginInstaller(paths: .default).uninstall(id: plugin.manifest.id)
                             await PluginManager.shared.loadAll()
+                            // Drop the uninstalled plugin's configs from MCPManager so a later
+                            // reloadServers() cannot resurrect its servers from stale state.
+                            await MCPManager.shared.setPluginConfigs(await PluginManager.shared.mcpConfigs())
                             onChange()
                         }
                     }

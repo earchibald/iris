@@ -84,6 +84,10 @@ actor MCPManager {
         statuses.removeAll()
     }
 
+    /// Full fleet restart from current state. WARNING: this restarts from the plugin configs
+    /// last pushed via `setPluginConfigs(_:)` — callers must first re-push fresh configs
+    /// (`PluginManager.shared.loadAll()` + `setPluginConfigs(await ...mcpConfigs())`), or
+    /// stale state can resurrect servers (with expanded secrets) of uninstalled plugins.
     func reloadServers() async {
         await stopServers()
         await startServers()
