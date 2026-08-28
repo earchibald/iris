@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 struct PluginAuthStatus: Sendable, Equatable {
     let signedIn: Bool
@@ -22,12 +23,34 @@ enum PluginAuthRunner {
             process.standardOutput = pipe
             process.standardError = pipe
 
+            // Drain the pipe concurrently as data arrives. Without this, a check_command
+            // writing more than the pipe buffer (64KB) blocks on write before exiting,
+            // and since we only read after termination, the process never terminates —
+            // deadlock until the 30s timeout fires.
+            let collected = OSAllocatedUnfairLock(initialState: Data())
+            pipe.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty {
+                    handle.readabilityHandler = nil
+                    return
+                }
+                collected.withLock { $0.append(chunk) }
+            }
+
+            // Safe: DispatchWorkItem.cancel() and Process.terminate() are thread-safe under
+            // Foundation; cancel/execute are mutually exclusive here.
             nonisolated(unsafe) let timeout = DispatchWorkItem { process.terminate() }
             DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: timeout)
 
             process.terminationHandler = { p in
                 timeout.cancel()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let handle = pipe.fileHandleForReading
+                handle.readabilityHandler = nil
+                let trailing = (try? handle.readToEnd()) ?? nil
+                var data = collected.withLock { $0 }
+                if let trailing {
+                    data.append(trailing)
+                }
                 let output = String(data: data, encoding: .utf8) ?? ""
                 continuation.resume(returning: PluginAuthStatus(
                     signedIn: p.terminationStatus == 0, output: output))

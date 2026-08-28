@@ -28,6 +28,15 @@ struct PluginAuthRunnerTests {
         #expect(status.signedIn)
     }
 
+    @Test("large output does not deadlock the check")
+    func largeOutput() async {
+        let start = ContinuousClock.now
+        let status = await PluginAuthRunner.check(
+            auth(check: "head -c 200000 /dev/zero | tr '\\0' 'x'; exit 0"), config: [:])
+        #expect(status.signedIn)
+        #expect(ContinuousClock.now - start < .seconds(10))
+    }
+
     @Test("missing check command reports signed out with explanation")
     func missingCommand() async {
         var a = auth(check: "true")
