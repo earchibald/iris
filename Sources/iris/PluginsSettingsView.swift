@@ -5,12 +5,14 @@ enum InstallWizardSource: Identifiable {
     case folder(URL)
     case snippet
     case harnessImport
+    case convertLegacy(name: String)
 
     var id: String {
         switch self {
         case .folder(let url): return "folder:\(url.path)"
         case .snippet: return "snippet"
         case .harnessImport: return "import"
+        case .convertLegacy(let name): return "convert:\(name)"
         }
     }
 }
@@ -20,7 +22,7 @@ struct PluginsSettingsView: View {
     @State private var serverStatuses: [String: MCPManager.ServerStatus] = [:]
     @State private var selectedID: String?
     @State private var showInstallWizard: InstallWizardSource?
-    @State private var confirmUninstallID: String?
+    private let legacyFileWatcher = FileWatcher()
 
     var body: some View {
         HSplitView {
@@ -30,10 +32,19 @@ struct PluginsSettingsView: View {
                 .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
         }
         .task { await refresh() }
+        .task { await watchLegacyFile() }
         .sheet(item: $showInstallWizard) { source in
             PluginInstallWizardView(source: source) {
                 Task { await refresh() }
             }
+        }
+    }
+
+    private func watchLegacyFile() async {
+        let path = IrisPaths.default.mcpServersJSON.path
+        for await _ in legacyFileWatcher.watch(paths: [path]) {
+            await MCPManager.shared.reloadServers()
+            await refresh()
         }
     }
 
@@ -54,7 +65,7 @@ struct PluginsSettingsView: View {
                                 set: { enabled in
                                     Task {
                                         await PluginManager.shared.setEnabled(plugin.manifest.id, enabled: enabled)
-                                        await reloadMCP()
+                                        await restartMCP(forPlugin: plugin.manifest.id)
                                         await refresh()
                                     }
                                 }
@@ -69,6 +80,9 @@ struct PluginsSettingsView: View {
                             Circle().fill(legacyColor(name)).frame(width: 8, height: 8)
                             Text(name)
                             Spacer()
+                        }
+                        .contextMenu {
+                            Button("Convert to Plugin…") { showInstallWizard = .convertLegacy(name: name) }
                         }
                     }
                     Button("Edit mcp_servers.json") {
@@ -142,10 +156,20 @@ struct PluginsSettingsView: View {
         if selectedID == nil { selectedID = plugins.first?.manifest.id }
     }
 
-    private func reloadMCP() async {
+    private func restartMCP(forPlugin id: String) async {
+        await PluginsSettingsView.restartMCP(forPlugin: id)
+    }
+}
+
+/// Restarts only the servers owned by one plugin, leaving everything else running.
+/// `startServers()` skips names already present in `servers`, so unrelated servers
+/// (legacy or other plugins) are untouched.
+extension PluginsSettingsView {
+    static func restartMCP(forPlugin id: String) async {
+        await MCPManager.shared.stopServers(withPrefix: "\(id).")
         let configs = await PluginManager.shared.mcpConfigs()
         await MCPManager.shared.setPluginConfigs(configs)
-        await MCPManager.shared.reloadServers()
+        await MCPManager.shared.startServers()
     }
 }
 
@@ -291,6 +315,7 @@ struct PluginDetailView: View {
     private func saveConfig(_ key: String) {
         Task {
             await PluginManager.shared.setConfigValue(plugin.manifest.id, key: key, value: configDrafts[key] ?? "")
+            await PluginsSettingsView.restartMCP(forPlugin: plugin.manifest.id)
             onChange()
         }
     }
@@ -302,6 +327,7 @@ struct PluginDetailView: View {
         KeychainManager.shared.saveSecrets(secrets, service: service)
         Task {
             await PluginManager.shared.loadAll()
+            await PluginsSettingsView.restartMCP(forPlugin: plugin.manifest.id)
             onChange()
         }
     }

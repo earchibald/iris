@@ -83,6 +83,20 @@ actor MCPManager {
     func getServerNames() async -> [String] {
         return Array(servers.keys).sorted()
     }
+
+    /// Removes one server entry from mcp_servers.json. Only called by the explicit
+    /// "Convert to plugin" flow — Iris never otherwise edits the hand-edited file.
+    func removeLegacyServer(named name: String) {
+        let url = URL(fileURLWithPath: configPath)
+        guard let data = try? Data(contentsOf: url),
+              var configs = try? JSONDecoder().decode([String: MCPServerConfig].self, from: data) else { return }
+        configs[name] = nil
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let out = try? encoder.encode(configs) {
+            try? out.write(to: url, options: .atomic)
+        }
+    }
     
     private func startServer(name: String, config: MCPServerConfig) async throws {
         let process = Process()

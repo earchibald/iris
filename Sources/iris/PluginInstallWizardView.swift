@@ -109,6 +109,12 @@ struct PluginInstallWizardView: View {
                     .onChange(of: selectedServer) { _, server in importServer(server) }
                     Text("Iris reads this config; it never edits it.").font(.caption).foregroundStyle(.secondary)
                 }
+            case .convertLegacy(let name):
+                if let draft {
+                    Text("Converting **\(name)** from mcp_servers.json to **\(draft.manifest.name)**.")
+                } else {
+                    ProgressView("Reading \(name)…")
+                }
             }
         }
     }
@@ -248,6 +254,17 @@ struct PluginInstallWizardView: View {
             break
         case .harnessImport:
             detectedHarnesses = HarnessConfigImporter.detect()
+        case .convertLegacy(let name):
+            do {
+                let raw = try HarnessConfigImporter.servers(at: IrisPaths.default.mcpServersJSON)
+                if let entry = raw[name] {
+                    parseSnippetJSON(HarnessConfigImporter.snippetJSON(serverName: name, raw: entry), source: "convert")
+                } else {
+                    loadError = "\(name) not found in mcp_servers.json"
+                }
+            } catch {
+                loadError = String(describing: error)
+            }
         }
     }
 
@@ -296,6 +313,10 @@ struct PluginInstallWizardView: View {
                 let configs = await PluginManager.shared.mcpConfigs()
                 await MCPManager.shared.setPluginConfigs(configs)
                 await MCPManager.shared.startServers()
+                if case .convertLegacy(let name) = source {
+                    await MCPManager.shared.removeLegacyServer(named: name)
+                    await MCPManager.shared.reloadServers()
+                }
                 onComplete()
                 dismiss()
             } catch {
