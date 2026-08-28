@@ -147,11 +147,7 @@ actor PluginManager {
     // MARK: - Private
 
     private func placeholderManifest(id: String) -> IPFManifest {
-        var m = try! IPFManifest.parse(
-            markdown: "---\nipf: \"1.0\"\nid: \(id)\nname: \(id)\nversion: 0.0.0\n---\n",
-            directoryName: id)
-        m.markdownBody = ""
-        return m
+        IPFManifest(placeholderID: id)
     }
 
     private func effectiveConfigValues(_ plugin: LoadedPlugin) -> [String: String] {
@@ -185,8 +181,10 @@ actor PluginManager {
                 return .needsConfig("Binary '\(binary.name)' not found\(hint)")
             }
         }
-        if let mcpRel = manifest.components?.mcp,
-           let raw = try? String(contentsOf: directory.appendingPathComponent(mcpRel), encoding: .utf8) {
+        if let mcpRel = manifest.components?.mcp {
+            guard let raw = try? String(contentsOf: directory.appendingPathComponent(mcpRel), encoding: .utf8) else {
+                return .needsConfig("mcp.json missing or unreadable at \(mcpRel)")
+            }
             let declared = Set((manifest.secrets ?? []).map(\.key))
             for key in PluginReferences.keychainKeys(in: raw) where !declared.contains(key) {
                 return .failed(IPFError.undeclaredSecret(key).description)

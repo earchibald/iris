@@ -90,6 +90,14 @@ struct IPFManifest: Codable, Sendable, Equatable {
     static let supportedMajor = 1
     nonisolated(unsafe) static let idPattern = /^[a-z0-9]+(-[a-z0-9]+)*$/
 
+    /// Non-parsing initializer for internal placeholder construction (broken-plugin rows).
+    init(placeholderID id: String) {
+        self.ipf = "1.0"
+        self.id = id
+        self.name = id
+        self.version = "0.0.0"
+    }
+
     /// Parses `plugin.md` content. `directoryName` is the plugin folder name; it must equal `id`.
     static func parse(markdown: String, directoryName: String) throws -> IPFManifest {
         let lines = markdown.components(separatedBy: "\n")

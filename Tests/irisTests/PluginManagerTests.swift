@@ -128,4 +128,83 @@ struct PluginManagerTests {
         #expect(await pm.skillRoots() == [dir.appendingPathComponent("skills")])
         #expect(await pm.ruleFiles().map(\.lastPathComponent) == ["conduct.md"])
     }
+
+    @Test("undeclared keychain ref fails")
+    func undeclaredSecretFails() async throws {
+        let manifest = """
+        ---
+        ipf: "1.0"
+        id: echo-plug
+        name: Echo Plug
+        version: 1.0.0
+        components:
+          mcp: mcp.json
+        ---
+        """
+        let mcpJSON = """
+        { "echo": { "command": "/bin/echo", "args": ["hi"], "env": { "TOKEN": "${keychain:NOT_DECLARED}" } } }
+        """
+        let (paths, _) = try fixture(manifest: manifest, id: "echo-plug", mcpJSON: mcpJSON)
+        let pm = PluginManager(paths: paths)
+        await pm.loadAll()
+
+        let plugins = await pm.plugins()
+        guard case .failed(let message) = plugins[0].status else {
+            Issue.record("expected failed, got \(plugins[0].status)")
+            return
+        }
+        #expect(message.contains("NOT_DECLARED"))
+    }
+
+    @Test("pathological directory name isolates to failed, no crash")
+    func pathologicalDirectoryName() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("iris-pm-test-\(UUID().uuidString)")
+        let paths = IrisPaths(root: root)
+        try paths.ensureDirectories()
+
+        let badDir = paths.pluginsDir.appendingPathComponent("my: plugin")
+        try FileManager.default.createDirectory(at: badDir, withIntermediateDirectories: true)
+        try "garbage, not a manifest".write(
+            to: badDir.appendingPathComponent("plugin.md"), atomically: true, encoding: .utf8)
+
+        let goodDir = paths.pluginsDir.appendingPathComponent("good-one")
+        try FileManager.default.createDirectory(at: goodDir, withIntermediateDirectories: true)
+        try "---\nipf: \"1.0\"\nid: good-one\nname: Good\nversion: 1.0.0\n---\n"
+            .write(to: goodDir.appendingPathComponent("plugin.md"), atomically: true, encoding: .utf8)
+
+        let pm = PluginManager(paths: paths)
+        await pm.loadAll()
+        let plugins = await pm.plugins()
+        #expect(plugins.count == 2)
+        #expect(plugins.first { $0.directory.lastPathComponent == "good-one" }?.status == .ok)
+        guard case .failed = plugins.first(where: { $0.directory.lastPathComponent == "my: plugin" })?.status else {
+            Issue.record("expected failed status for pathological plugin, got \(String(describing: plugins.map(\.status)))")
+            return
+        }
+    }
+
+    @Test("declared but missing mcp.json is needsConfig")
+    func declaredMcpMissingFile() async throws {
+        let manifest = """
+        ---
+        ipf: "1.0"
+        id: mcp-missing
+        name: MCP Missing
+        version: 1.0.0
+        components:
+          mcp: mcp.json
+        ---
+        """
+        let (paths, _) = try fixture(manifest: manifest, id: "mcp-missing")
+        let pm = PluginManager(paths: paths)
+        await pm.loadAll()
+
+        let plugins = await pm.plugins()
+        guard case .needsConfig(let message) = plugins[0].status else {
+            Issue.record("expected needsConfig, got \(plugins[0].status)")
+            return
+        }
+        #expect(message.contains("mcp.json"))
+    }
 }
