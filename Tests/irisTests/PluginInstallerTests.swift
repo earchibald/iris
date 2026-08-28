@@ -105,6 +105,17 @@ struct PluginInstallerTests {
         KeychainManager.shared.deleteSecrets(service: "iris.plugin.neat-plug")
     }
 
+    @Test("commit skips empty-string secret values (no empty Keychain entries)")
+    func skipsEmptySecrets() throws {
+        let paths = try tempPaths()
+        let src = try sourceDir(manifest: manifest)
+        var draft = try PluginInstaller(paths: paths).stage(directory: src, source: "local")
+        draft.secretValues["API_KEY"] = ""   // wizard-seeded placeholder, never filled in
+        try PluginInstaller(paths: paths).commit(draft)
+        #expect(KeychainManager.shared.secrets(service: "iris.plugin.neat-plug")["API_KEY"] == nil)
+        KeychainManager.shared.deleteSecrets(service: "iris.plugin.neat-plug")
+    }
+
     @Test(".DS_Store in the source directory is not staged")
     func skipsHiddenFiles() throws {
         let paths = try tempPaths()

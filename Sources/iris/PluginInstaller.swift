@@ -79,10 +79,13 @@ struct PluginInstaller: Sendable {
         if movedAside { try? fm.removeItem(at: backup) }
 
         // Only after the directory landed: secrets to Keychain, state to plugins.json.
-        if !draft.secretValues.isEmpty {
+        // Empty-string values are placeholders the wizard seeded for declared-but-unfilled
+        // secrets — skip them so no empty Keychain entries are created.
+        let secretsToStore = draft.secretValues.filter { !$0.value.isEmpty }
+        if !secretsToStore.isEmpty {
             let service = KeychainManager.pluginService(id)
             var existing = KeychainManager.shared.secrets(service: service)
-            existing.merge(draft.secretValues) { _, new in new }
+            existing.merge(secretsToStore) { _, new in new }
             KeychainManager.shared.saveSecrets(existing, service: service)
         }
         let store = PluginStateStore(paths: paths)
@@ -160,18 +163,18 @@ extension PluginInstaller {
     static func draft(fromSnippet json: String) throws -> PluginDraft {
         guard let data = json.data(using: .utf8),
               let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw IPFError.yamlError("Snippet is not valid JSON")
+            throw IPFError.invalidJSON("Snippet is not valid JSON")
         }
         let serverDict = (raw["mcpServers"] as? [String: Any]) ?? raw
         if serverDict.count > 1 {
             let names = serverDict.keys.sorted().joined(separator: ", ")
-            throw IPFError.yamlError(
+            throw IPFError.invalidJSON(
                 "Snippet contains \(serverDict.count) servers (\(names)); paste one server at a time")
         }
         guard let (serverName, serverAny) = serverDict.first,
               let server = serverAny as? [String: Any],
               let command = server["command"] as? String else {
-            throw IPFError.yamlError("Snippet has no server with a command")
+            throw IPFError.invalidJSON("Snippet has no server with a command")
         }
         let args = (server["args"] as? [String]) ?? []
         let env = (server["env"] as? [String: String]) ?? [:]
@@ -179,19 +182,53 @@ extension PluginInstaller {
 
         let envKeyPattern = /^[A-Za-z0-9_]+$/
         for key in env.keys where (try? envKeyPattern.wholeMatch(in: key)) == nil {
-            throw IPFError.yamlError("Env key '\(key)' is not a valid identifier (A-Za-z0-9_)")
+            throw IPFError.invalidJSON("Env key '\(key)' is not a valid identifier (A-Za-z0-9_)")
         }
 
         let id = serverName.lowercased()
             .replacing(/[^a-z0-9]+/, with: "-")
             .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
         guard !id.isEmpty else {
-            throw IPFError.yamlError("Cannot derive a plugin id from server name '\(serverName)'")
+            throw IPFError.invalidJSON("Cannot derive a plugin id from server name '\(serverName)'")
         }
 
+        return try buildGeneratedDraft(
+            id: id, serverName: serverName, command: command, args: args,
+            secretValues: lifted.secrets, configValues: lifted.config, source: "snippet")
+    }
+
+    /// Rebuilds a generated draft's `plugin.md` and `mcp.json` from its current
+    /// secret/config classification. Called by the wizard after the user re-tags a field
+    /// (secret <-> config), so the committed files match what the user confirmed. Drafts
+    /// that are not wrap-and-lift generated (anything beyond exactly plugin.md + mcp.json,
+    /// e.g. a staged folder) are returned unchanged.
+    static func regenerate(_ draft: PluginDraft) throws -> PluginDraft {
+        guard Set(draft.files.keys) == ["plugin.md", "mcp.json"],
+              let mcpData = draft.files["mcp.json"] else {
+            return draft
+        }
+        guard let servers = try? JSONDecoder().decode([String: MCPServerConfig].self, from: mcpData),
+              servers.count == 1, let (serverName, config) = servers.first else {
+            throw IPFError.invalidJSON("Draft mcp.json is not a single-server map")
+        }
+        var rebuilt = try buildGeneratedDraft(
+            id: draft.manifest.id, serverName: serverName,
+            command: config.command, args: config.args,
+            secretValues: draft.secretValues, configValues: draft.configValues,
+            source: draft.source)
+        rebuilt.source = draft.source
+        return rebuilt
+    }
+
+    /// The one generator for wrap-and-lift plugin files: emits mcp.json (references only,
+    /// never literal values) and a plugin.md manifest declaring the given secret/config keys.
+    private static func buildGeneratedDraft(
+        id: String, serverName: String, command: String, args: [String],
+        secretValues: [String: String], configValues: [String: String], source: String
+    ) throws -> PluginDraft {
         var refEnv: [String: String] = [:]
-        for key in lifted.secrets.keys { refEnv[key] = "${keychain:\(key)}" }
-        for key in lifted.config.keys { refEnv[key] = "${config:\(key)}" }
+        for key in secretValues.keys { refEnv[key] = "${keychain:\(key)}" }
+        for key in configValues.keys { refEnv[key] = "${config:\(key)}" }
 
         let mcpConfig = [serverName: MCPServerConfig(command: command, args: args,
                                                      env: refEnv.isEmpty ? nil : refEnv)]
@@ -213,15 +250,15 @@ extension PluginInstaller {
           binaries:
             - name: \(yamlQuoted(binaryName))
         """
-        if !lifted.config.isEmpty {
+        if !configValues.isEmpty {
             yaml += "\nconfig:"
-            for key in lifted.config.keys.sorted() {
+            for key in configValues.keys.sorted() {
                 yaml += "\n  - key: \(key)"
             }
         }
-        if !lifted.secrets.isEmpty {
+        if !secretValues.isEmpty {
             yaml += "\nsecrets:"
-            for key in lifted.secrets.keys.sorted() {
+            for key in secretValues.keys.sorted() {
                 yaml += "\n  - key: \(key)\n    required: true"
             }
         }
@@ -230,9 +267,9 @@ extension PluginInstaller {
         var pluginDraft = PluginDraft(
             manifest: try IPFManifest.parse(markdown: yaml, directoryName: id),
             files: ["plugin.md": Data(yaml.utf8), "mcp.json": mcpData],
-            source: "snippet")
-        pluginDraft.secretValues = lifted.secrets
-        pluginDraft.configValues = lifted.config
+            source: source)
+        pluginDraft.secretValues = secretValues
+        pluginDraft.configValues = configValues
         return pluginDraft
     }
 }

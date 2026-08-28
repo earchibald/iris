@@ -165,7 +165,24 @@ struct PluginInstallWizardView: View {
                     }.frame(width: 160).labelsHidden()
                 }
             }
-            if allEnvKeys.isEmpty {
+            if let auths = draft?.manifest.auth, !auths.isEmpty {
+                // Consent surface only: the commands are shown, never executed by the wizard.
+                // Sign-in happens from the plugin's detail pane after install.
+                ForEach(Array(auths.enumerated()), id: \.offset) { _, auth in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(auth.label ?? "Account").fontWeight(.medium)
+                        if let setup = auth.setupCommand {
+                            Text(setup).font(.system(.caption, design: .monospaced))
+                        }
+                        if let check = auth.checkCommand {
+                            Text(check).font(.system(.caption, design: .monospaced))
+                        }
+                        Text("Runs when you sign in / check status")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            if allEnvKeys.isEmpty && (draft?.manifest.auth ?? []).isEmpty {
                 Text("Nothing to configure.").foregroundStyle(.secondary)
             }
         }
@@ -244,7 +261,16 @@ struct PluginInstallWizardView: View {
         switch source {
         case .folder(let url):
             do {
-                let staged = try PluginInstaller(paths: .default).stage(directory: url, source: "local")
+                var staged = try PluginInstaller(paths: .default).stage(directory: url, source: "local")
+                // Seed declared config (default or empty) and secrets (empty) so the
+                // Configuration step actually collects them. Empty secret values are
+                // skipped at commit — no empty Keychain entries.
+                for field in staged.manifest.config ?? [] where staged.configValues[field.key] == nil {
+                    staged.configValues[field.key] = field.default ?? ""
+                }
+                for field in staged.manifest.secrets ?? [] where staged.secretValues[field.key] == nil {
+                    staged.secretValues[field.key] = ""
+                }
                 draft = staged
                 secretKeys = Set(staged.secretValues.keys)
             } catch {
@@ -303,11 +329,17 @@ struct PluginInstallWizardView: View {
     }
 
     private func install() {
-        guard let draft else { return }
+        guard var draft else { return }
         loadError = nil
         installing = true
         Task {
             do {
+                // Generated (non-folder) drafts: rebuild plugin.md/mcp.json from the final
+                // secret/config classification, so re-tagging in the Configuration step is
+                // reflected in the committed files.
+                if case .folder = source {} else {
+                    draft = try PluginInstaller.regenerate(draft)
+                }
                 try PluginInstaller(paths: .default).commit(draft)
                 await PluginManager.shared.loadAll()
                 let configs = await PluginManager.shared.mcpConfigs()

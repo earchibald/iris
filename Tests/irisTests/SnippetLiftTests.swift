@@ -54,6 +54,43 @@ struct SnippetLiftTests {
         #expect(draft.secretValues.isEmpty)
     }
 
+    @Test("regenerate reflects a secret->config re-tag in mcp.json and the manifest")
+    func regenerateAfterRetag() throws {
+        let snippet = """
+        { "mcpServers": { "svc": {
+            "command": "svc-mcp", "args": [],
+            "env": { "API_KEY": "sk-1", "REGION": "eu" } } } }
+        """
+        var draft = try PluginInstaller.draft(fromSnippet: snippet)
+        #expect(draft.secretValues.keys.contains("API_KEY"))
+
+        // Simulate the wizard's re-tag: API_KEY moves secret -> config.
+        draft.configValues["API_KEY"] = draft.secretValues.removeValue(forKey: "API_KEY")
+
+        let rebuilt = try PluginInstaller.regenerate(draft)
+        let mcp = String(decoding: rebuilt.files["mcp.json"]!, as: UTF8.self)
+        #expect(mcp.contains("${config:API_KEY}"))
+        #expect(!mcp.contains("${keychain:API_KEY}"))
+        #expect(!mcp.contains("sk-1"))
+
+        let manifest = try IPFManifest.parse(
+            markdown: String(decoding: rebuilt.files["plugin.md"]!, as: UTF8.self),
+            directoryName: rebuilt.manifest.id)
+        #expect(manifest.config?.map(\.key).sorted() == ["API_KEY", "REGION"])
+        #expect(manifest.secrets?.map(\.key).contains("API_KEY") != true)
+        #expect(rebuilt.configValues["API_KEY"] == "sk-1")
+        #expect(rebuilt.source == draft.source)
+    }
+
+    @Test("regenerate leaves a non-generated draft (extra files) unchanged")
+    func regenerateNonGenerated() throws {
+        var draft = try PluginInstaller.draft(fromSnippet: #"{ "svc": { "command": "svc-mcp" } }"#)
+        draft.files["skills/x/SKILL.md"] = Data("skill".utf8)
+        let unchanged = try PluginInstaller.regenerate(draft)
+        #expect(unchanged.files.count == draft.files.count)
+        #expect(unchanged.files["plugin.md"] == draft.files["plugin.md"])
+    }
+
     @Test("invalid JSON throws")
     func invalidJSON() {
         #expect(throws: (any Error).self) {
