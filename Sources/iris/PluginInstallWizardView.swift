@@ -314,8 +314,13 @@ struct PluginInstallWizardView: View {
                 await MCPManager.shared.setPluginConfigs(configs)
                 await MCPManager.shared.startServers()
                 if case .convertLegacy(let name) = source {
+                    // The new namespaced server is already running (startServers() above); tear
+                    // down only the old legacy-named one instead of restarting the whole fleet.
+                    // Suppress the legacy-file watcher's own reaction to this write, since it
+                    // would otherwise redundantly reload every server ~1s later.
+                    LegacyFileWatchSuppressor.suppressNext()
                     await MCPManager.shared.removeLegacyServer(named: name)
-                    await MCPManager.shared.reloadServers()
+                    await MCPManager.shared.stopServer(named: name)
                 }
                 onComplete()
                 dismiss()

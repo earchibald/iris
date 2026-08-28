@@ -42,6 +42,15 @@ actor MCPManager {
         }
     }
 
+    /// Stops exactly one server by its full name. Unlike `stopServers(withPrefix:)`, this
+    /// never over-matches (e.g. stopping "sqlite" must not also stop "sqlite2").
+    func stopServer(named name: String) {
+        guard let server = servers[name] else { return }
+        server.process.terminate()
+        servers[name] = nil
+        statuses[name] = nil
+    }
+
     private var configPath: String {
         return IrisPaths.default.mcpServersJSON.path
     }

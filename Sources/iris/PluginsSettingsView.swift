@@ -17,6 +17,25 @@ enum InstallWizardSource: Identifiable {
     }
 }
 
+/// Serializes a single "the next legacy-file-watcher tick is self-inflicted" flag so the
+/// convert-to-plugin flow's own write to mcp_servers.json doesn't trigger a second, redundant
+/// fleet-wide `reloadServers()` on top of the targeted restart it already did. MainActor-isolated
+/// because it's only ever touched from UI-driven `Task { @MainActor ... }` work.
+@MainActor
+enum LegacyFileWatchSuppressor {
+    private static var suppressed = false
+
+    /// Call immediately before a self-inflicted write to mcp_servers.json.
+    static func suppressNext() { suppressed = true }
+
+    /// Called by the watcher's handler; returns true (and clears the flag) exactly once per
+    /// `suppressNext()` call, so a genuine follow-up hand-edit still triggers a normal reload.
+    static func consumeSuppression() -> Bool {
+        defer { suppressed = false }
+        return suppressed
+    }
+}
+
 struct PluginsSettingsView: View {
     @State private var plugins: [LoadedPlugin] = []
     @State private var serverStatuses: [String: MCPManager.ServerStatus] = [:]
@@ -32,6 +51,15 @@ struct PluginsSettingsView: View {
                 .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
         }
         .task { await refresh() }
+        // No explicit teardown call is needed here: FileWatcher.watch(paths:)'s AsyncStream sets
+        // `continuation.onTermination = { [weak self] _ in self?.stop() }` (FileWatcher.swift:71-73),
+        // and the Swift stdlib's AsyncStream.Iterator.next() wraps its await in
+        // withTaskCancellationHandler, calling the stream's cancellation path (which fires
+        // onTermination) when the enclosing Task is cancelled. `.task` cancels its Task on view
+        // disappearance, so this `for await` loop's cancellation deterministically reaches
+        // FileWatcher.stop() (FileWatcher.swift:77-84), which stops/invalidates/releases the
+        // FSEventStream. Repeated tab visits create a fresh FileWatcher-owned stream per `.task`
+        // run and tear down the prior one on each disappearance — no leak.
         .task { await watchLegacyFile() }
         .sheet(item: $showInstallWizard) { source in
             PluginInstallWizardView(source: source) {
@@ -43,6 +71,13 @@ struct PluginsSettingsView: View {
     private func watchLegacyFile() async {
         let path = IrisPaths.default.mcpServersJSON.path
         for await _ in legacyFileWatcher.watch(paths: [path]) {
+            if LegacyFileWatchSuppressor.consumeSuppression() {
+                // Self-inflicted write (e.g. convert-to-plugin's removeLegacyServer); the
+                // install flow already did a targeted start/stop, so skip the redundant
+                // fleet-wide reload but still refresh the UI's view of server statuses.
+                await refresh()
+                continue
+            }
             await MCPManager.shared.reloadServers()
             await refresh()
         }
