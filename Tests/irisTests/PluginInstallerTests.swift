@@ -79,6 +79,41 @@ struct PluginInstallerTests {
         #expect(PluginStateStore(paths: paths).load()["neat-plug"] == nil)
     }
 
+    @Test("reinstall over an existing install succeeds and replaces content")
+    func reinstall() throws {
+        let paths = try tempPaths()
+        let installer = PluginInstaller(paths: paths)
+
+        let src1 = try sourceDir(manifest: manifest)
+        var draft1 = try installer.stage(directory: src1, source: "local")
+        draft1.secretValues["API_KEY"] = "sk-123"
+        try installer.commit(draft1)
+
+        let manifestV2 = manifest.replacingOccurrences(of: "version: 2.0.0", with: "version: 3.0.0")
+        let src2 = try sourceDir(manifest: manifestV2)
+        var draft2 = try installer.stage(directory: src2, source: "local")
+        draft2.secretValues["API_KEY"] = "sk-123"
+        try installer.commit(draft2)
+
+        let installed = paths.pluginsDir.appendingPathComponent("neat-plug")
+        let installedManifest = try String(
+            contentsOf: installed.appendingPathComponent("plugin.md"), encoding: .utf8
+        )
+        #expect(installedManifest.contains("version: 3.0.0"))
+        let state = PluginStateStore(paths: paths).load()["neat-plug"]
+        #expect(state?.installedVersion == "3.0.0")
+        KeychainManager.shared.deleteSecrets(service: "iris.plugin.neat-plug")
+    }
+
+    @Test(".DS_Store in the source directory is not staged")
+    func skipsHiddenFiles() throws {
+        let paths = try tempPaths()
+        let src = try sourceDir(manifest: manifest)
+        try Data().write(to: src.appendingPathComponent(".DS_Store"))
+        let draft = try PluginInstaller(paths: paths).stage(directory: src, source: "local")
+        #expect(draft.files[".DS_Store"] == nil)
+    }
+
     @Test("commit of an invalid draft leaves no trace")
     func atomicity() throws {
         let paths = try tempPaths()

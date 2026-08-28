@@ -24,16 +24,21 @@ struct PluginInstaller: Sendable {
         let manifest = try IPFManifest.parse(markdown: content, directoryName: directory.lastPathComponent)
 
         var files: [String: Data] = [:]
-        let enumerator = fm.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey])
+        let enumerator = fm.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
         let dirPath = (directory.path as NSString).standardizingPath
         while let url = enumerator?.nextObject() as? URL {
             let values = try url.resourceValues(forKeys: [.isRegularFileKey])
             guard values.isRegularFile == true else { continue }
             let filePath = (url.path as NSString).standardizingPath
-            if filePath.hasPrefix(dirPath + "/") {
-                let relative = String(filePath.dropFirst(dirPath.count + 1))
-                files[relative] = try Data(contentsOf: url)
+            guard filePath.hasPrefix(dirPath + "/") else {
+                throw IPFError.yamlError("File \(url.path) is outside the plugin directory")
             }
+            let relative = String(filePath.dropFirst(dirPath.count + 1))
+            files[relative] = try Data(contentsOf: url)
         }
         return PluginDraft(manifest: manifest, files: files, source: source)
     }
@@ -55,12 +60,23 @@ struct PluginInstaller: Sendable {
         let written = try String(contentsOf: staging.appendingPathComponent("plugin.md"), encoding: .utf8)
         _ = try IPFManifest.parse(markdown: written, directoryName: id)
 
-        // Move into place (replace an existing install of the same id).
+        // Move into place (replace an existing install of the same id) using move-aside so a
+        // failed final move never leaves the destination missing: an existing install is moved
+        // to a backup location first, and restored if the move-in fails.
         let destination = paths.pluginsDir.appendingPathComponent(id)
+        let backup = fm.temporaryDirectory.appendingPathComponent("iris-backup-\(UUID().uuidString)")
+        var movedAside = false
         if fm.fileExists(atPath: destination.path) {
-            try fm.removeItem(at: destination)
+            try fm.moveItem(at: destination, to: backup)
+            movedAside = true
         }
-        try fm.moveItem(at: staging, to: destination)
+        do {
+            try fm.moveItem(at: staging, to: destination)
+        } catch {
+            if movedAside { try? fm.moveItem(at: backup, to: destination) }
+            throw error
+        }
+        if movedAside { try? fm.removeItem(at: backup) }
 
         // Only after the directory landed: secrets to Keychain, state to plugins.json.
         if !draft.secretValues.isEmpty {
