@@ -155,37 +155,94 @@ actor MCPManager {
         print("MCP Server \(name) connected. Found \(toolsResult.tools.count) tools.")
     }
     
+    /// Recursively converts an MCP JSONSchema value (`MCP.Value`) into a Gemini `Schema`.
+    ///
+    /// ARRAY schemas always get `items` (defaulting to STRING when the source omits `items`
+    /// or uses a form we don't model), because Gemini rejects arrays without items
+    /// (see `Schema.items` doc comment). Nested OBJECT properties are recursed into rather
+    /// than flattened, so nested arrays also get their `items` set.
+    static func geminiSchema(fromMCP value: MCP.Value) -> Schema {
+        guard case .object(let dict) = value else {
+            return Schema(type: "STRING")
+        }
+
+        var desc: String? = nil
+        if let descVal = dict["description"], case .string(let d) = descVal {
+            desc = d
+        }
+
+        var typeStr: String? = nil
+        if let typeVal = dict["type"], case .string(let t) = typeVal {
+            typeStr = t
+        }
+
+        switch typeStr?.lowercased() {
+        case "array":
+            var itemsSchema = Schema(type: "STRING")
+            if let itemsVal = dict["items"] {
+                itemsSchema = geminiSchema(fromMCP: itemsVal)
+            }
+            return Schema(type: "ARRAY", description: desc, items: itemsSchema)
+
+        case "object":
+            var properties: [String: Schema] = [:]
+            var required: [String] = []
+            if let propsValue = dict["properties"], case .object(let props) = propsValue {
+                for (k, v) in props {
+                    properties[k] = geminiSchema(fromMCP: v)
+                }
+            }
+            if let reqValue = dict["required"], case .array(let reqArray) = reqValue {
+                for reqVal in reqArray {
+                    if case .string(let s) = reqVal {
+                        required.append(s)
+                    }
+                }
+            }
+            return Schema(
+                type: "OBJECT",
+                properties: properties.isEmpty ? nil : properties,
+                required: required.isEmpty ? nil : required,
+                description: desc
+            )
+
+        case .some(let t):
+            // Scalar type (string/number/integer/boolean/etc.) — pass through uppercased.
+            return Schema(type: t.uppercased(), description: desc)
+
+        case .none:
+            // Missing/unknown type: safe STRING fallback so callers embedding this inside an
+            // ARRAY or OBJECT always end up with a schema Gemini will accept.
+            return Schema(type: "STRING", description: desc)
+        }
+    }
+
     func getGeminiTools() -> [FunctionDeclaration] {
         var declarations: [FunctionDeclaration] = []
         for (serverName, server) in servers {
             for tool in server.availableTools {
                 // Prepend server name to tool name to avoid collisions
                 let uniqueName = "\(serverName)___\(tool.name)"
-                
+
                 // Convert MCP JSONSchema to Gemini Schema
-                // Since they are very similar JSON objects, we just need to adapt the structure.
-                // We will rely on simple JSON parsing for now, or use our Schema type.
                 var properties: [String: Schema] = [:]
                 var required: [String] = []
-                
+
                 if case .object(let schemaDict) = tool.inputSchema,
                    let propsValue = schemaDict["properties"],
                    case .object(let props) = propsValue {
                     for (k, v) in props {
-                        if case .object(let vDict) = v,
-                           let typeVal = vDict["type"],
-                           case .string(let typeStr) = typeVal {
-                            var desc: String? = nil
-                            if let descVal = vDict["description"], case .string(let d) = descVal {
-                                desc = d
-                            }
-                            properties[k] = Schema(
-                                type: typeStr.uppercased(),
-                                properties: nil,
-                                required: nil,
-                                description: desc
-                            )
+                        // Match prior top-level behavior: properties with no recognizable
+                        // `type` are silently dropped (rather than being STRING-fallback'd),
+                        // since we don't know they were ever intended as tool parameters.
+                        // Inside nested arrays/objects, geminiSchema(fromMCP:) still applies
+                        // the safe STRING fallback so `items`/`properties` are never missing.
+                        guard case .object(let vDict) = v,
+                              let typeVal = vDict["type"],
+                              case .string = typeVal else {
+                            continue
                         }
+                        properties[k] = Self.geminiSchema(fromMCP: v)
                     }
                     if let reqValue = schemaDict["required"], case .array(let reqArray) = reqValue {
                         for reqVal in reqArray {
@@ -195,7 +252,7 @@ actor MCPManager {
                         }
                     }
                 }
-                
+
                 let geminiSchema = Schema(
                     type: "OBJECT",
                     properties: properties.isEmpty ? nil : properties,

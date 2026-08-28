@@ -43,7 +43,7 @@ let package = Package(
         ),
         .testTarget(
             name: "irisTests",
-            dependencies: ["iris"],
+            dependencies: ["iris", .product(name: "MCP", package: "swift-sdk")],
             exclude: ["Fixtures"]
         ),
     ],
