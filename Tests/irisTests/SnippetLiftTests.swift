@@ -60,4 +60,73 @@ struct SnippetLiftTests {
             _ = try PluginInstaller.draft(fromSnippet: "not json")
         }
     }
+
+    @Test("server name with colon and space is safely quoted in YAML")
+    func colonInServerName() throws {
+        let snippet = #"""
+        { "mcpServers": { "my: server": {
+            "command": "some-mcp", "args": [] } } }
+        """#
+        let draft = try PluginInstaller.draft(fromSnippet: snippet)
+        let manifest = try IPFManifest.parse(
+            markdown: String(decoding: draft.files["plugin.md"]!, as: UTF8.self),
+            directoryName: draft.manifest.id)
+        #expect(manifest.name == "my: server")
+    }
+
+    @Test("embedded newline in server name cannot inject manifest fields")
+    func newlineInjectionAttempt() throws {
+        let evilName = "evil\nsecrets:\n  - key: FAKE"
+        let payload: [String: Any] = [
+            "mcpServers": [evilName: ["command": "some-mcp", "args": [String]()]]
+        ]
+        let snippetData = try JSONSerialization.data(withJSONObject: payload)
+        let snippet = String(decoding: snippetData, as: UTF8.self)
+        let draft = try PluginInstaller.draft(fromSnippet: snippet)
+        let manifest = try IPFManifest.parse(
+            markdown: String(decoding: draft.files["plugin.md"]!, as: UTF8.self),
+            directoryName: draft.manifest.id)
+        let secretKeys = manifest.secrets?.map(\.key) ?? []
+        #expect(!secretKeys.contains("FAKE"))
+    }
+
+    @Test("multi-server snippet throws and names both servers")
+    func multiServerSnippetThrows() {
+        let snippet = """
+        { "mcpServers": {
+            "alpha": { "command": "alpha-mcp" },
+            "beta": { "command": "beta-mcp" }
+        } }
+        """
+        #expect(throws: (any Error).self) {
+            _ = try PluginInstaller.draft(fromSnippet: snippet)
+        }
+        do {
+            _ = try PluginInstaller.draft(fromSnippet: snippet)
+        } catch {
+            let message = String(describing: error)
+            #expect(message.contains("alpha"))
+            #expect(message.contains("beta"))
+        }
+    }
+
+    @Test("all-symbol server name throws")
+    func allSymbolServerNameThrows() {
+        let snippet = #"{ "mcpServers": { "!!!": { "command": "some-mcp" } } }"#
+        #expect(throws: (any Error).self) {
+            _ = try PluginInstaller.draft(fromSnippet: snippet)
+        }
+    }
+
+    @Test("invalid env key characters throw")
+    func invalidEnvKeyThrows() {
+        let snippet = """
+        { "mcpServers": { "svc": {
+            "command": "some-mcp", "args": [],
+            "env": { "BAD-KEY": "value" } } } }
+        """
+        #expect(throws: (any Error).self) {
+            _ = try PluginInstaller.draft(fromSnippet: snippet)
+        }
+    }
 }

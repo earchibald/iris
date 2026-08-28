@@ -141,6 +141,19 @@ extension PluginInstaller {
         return lifted
     }
 
+    /// Produces a safe double-quoted YAML scalar: escapes backslashes and quotes, and turns
+    /// newlines/tabs/carriage returns into their YAML double-quoted escapes so untrusted
+    /// snippet strings can't break the manifest's structure or inject extra fields.
+    private static func yamlQuoted(_ s: String) -> String {
+        var out = s
+        out = out.replacingOccurrences(of: "\\", with: "\\\\")
+        out = out.replacingOccurrences(of: "\"", with: "\\\"")
+        out = out.replacingOccurrences(of: "\r", with: "\\r")
+        out = out.replacingOccurrences(of: "\n", with: "\\n")
+        out = out.replacingOccurrences(of: "\t", with: "\\t")
+        return "\"\(out)\""
+    }
+
     /// Builds a single-server plugin draft from a standard `mcpServers` JSON snippet (or a
     /// bare `{name: {command,...}}` object). Literal env values are lifted into declarations;
     /// the generated mcp.json carries only `${...}` references.
@@ -150,6 +163,11 @@ extension PluginInstaller {
             throw IPFError.yamlError("Snippet is not valid JSON")
         }
         let serverDict = (raw["mcpServers"] as? [String: Any]) ?? raw
+        if serverDict.count > 1 {
+            let names = serverDict.keys.sorted().joined(separator: ", ")
+            throw IPFError.yamlError(
+                "Snippet contains \(serverDict.count) servers (\(names)); paste one server at a time")
+        }
         guard let (serverName, serverAny) = serverDict.first,
               let server = serverAny as? [String: Any],
               let command = server["command"] as? String else {
@@ -159,9 +177,17 @@ extension PluginInstaller {
         let env = (server["env"] as? [String: String]) ?? [:]
         let lifted = classifyEnv(env)
 
+        let envKeyPattern = /^[A-Za-z0-9_]+$/
+        for key in env.keys where (try? envKeyPattern.wholeMatch(in: key)) == nil {
+            throw IPFError.yamlError("Env key '\(key)' is not a valid identifier (A-Za-z0-9_)")
+        }
+
         let id = serverName.lowercased()
             .replacing(/[^a-z0-9]+/, with: "-")
             .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        guard !id.isEmpty else {
+            throw IPFError.yamlError("Cannot derive a plugin id from server name '\(serverName)'")
+        }
 
         var refEnv: [String: String] = [:]
         for key in lifted.secrets.keys { refEnv[key] = "${keychain:\(key)}" }
@@ -178,14 +204,14 @@ extension PluginInstaller {
         ---
         ipf: "1.0"
         id: \(id)
-        name: \(serverName)
+        name: \(yamlQuoted(serverName))
         version: 0.1.0
-        description: Wrapped MCP server \(serverName).
+        description: \(yamlQuoted("Wrapped MCP server \(serverName)."))
         components:
           mcp: mcp.json
         requires:
           binaries:
-            - name: \(binaryName)
+            - name: \(yamlQuoted(binaryName))
         """
         if !lifted.config.isEmpty {
             yaml += "\nconfig:"
