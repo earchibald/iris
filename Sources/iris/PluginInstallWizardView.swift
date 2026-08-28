@@ -167,7 +167,9 @@ struct PluginInstallWizardView: View {
 
     @ViewBuilder
     private var confirmStep: some View {
-        if let draft {
+        if let loadError {
+            Label(loadError, systemImage: "xmark.octagon").foregroundStyle(.red)
+        } else if let draft {
             Text("Install **\(draft.manifest.name)** \(draft.manifest.version)?")
             Text("→ \(IrisPaths.default.pluginsDir.appendingPathComponent(draft.manifest.id).path)")
                 .font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
@@ -179,9 +181,11 @@ struct PluginInstallWizardView: View {
     private var buttons: some View {
         HStack {
             Button("Cancel") { dismiss() }
+                .disabled(installing)
             Spacer()
             if step > 0 {
                 Button("Back") { step -= 1 }
+                    .disabled(installing)
             }
             if step < steps.count - 1 {
                 Button("Next") { step += 1 }
@@ -283,6 +287,7 @@ struct PluginInstallWizardView: View {
 
     private func install() {
         guard let draft else { return }
+        loadError = nil
         installing = true
         Task {
             do {
