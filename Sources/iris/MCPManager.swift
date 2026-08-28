@@ -20,22 +20,48 @@ actor MCPManager {
     }
     
     private var servers: [String: ActiveServer] = [:]
+
+    enum ServerStatus: Sendable, Equatable {
+        case running(toolCount: Int)
+        case failed(String)
+    }
+    private var pluginConfigs: [String: MCPServerConfig] = [:]
+    private var statuses: [String: ServerStatus] = [:]
+
+    func setPluginConfigs(_ configs: [String: MCPServerConfig]) {
+        pluginConfigs = configs
+    }
+
+    func serverStatuses() -> [String: ServerStatus] { statuses }
+
+    func stopServers(withPrefix prefix: String) {
+        for (name, server) in servers where name.hasPrefix(prefix) {
+            server.process.terminate()
+            servers[name] = nil
+            statuses[name] = nil
+        }
+    }
+
     private var configPath: String {
         return IrisPaths.default.mcpServersJSON.path
     }
-    
+
     init() {}
-    
+
     func startServers() async {
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
-              let configs = try? JSONDecoder().decode([String: MCPServerConfig].self, from: data) else {
-            return
+        var legacy: [String: MCPServerConfig] = [:]
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
+           let configs = try? JSONDecoder().decode([String: MCPServerConfig].self, from: data) {
+            let fileSecrets = KeychainManager.shared.secrets(service: KeychainManager.mcpFileService)
+            legacy = configs.mapValues { Self.expandLegacyEnv($0, secrets: fileSecrets) }
         }
-        
-        for (name, config) in configs {
+        let merged = Self.mergeConfigs(legacy: legacy, plugin: pluginConfigs)
+
+        for (name, config) in merged where servers[name] == nil {
             do {
                 try await startServer(name: name, config: config)
             } catch {
+                statuses[name] = .failed(String(describing: error))
                 print("Failed to start MCP server \(name): \(error)")
             }
         }
@@ -46,6 +72,7 @@ actor MCPManager {
             server.process.terminate()
         }
         servers.removeAll()
+        statuses.removeAll()
     }
 
     func reloadServers() async {
@@ -97,6 +124,7 @@ actor MCPManager {
             availableTools: toolsResult.tools,
             sanitizedDescriptions: safeDesc
         )
+        statuses[name] = .running(toolCount: toolsResult.tools.count)
         print("MCP Server \(name) connected. Found \(toolsResult.tools.count) tools.")
     }
     
@@ -193,5 +221,26 @@ actor MCPManager {
         } catch {
             return "Error calling MCP tool: \(error)"
         }
+    }
+
+    /// Expands `${keychain:KEY}` refs in a legacy mcp_servers.json entry against the shared
+    /// `iris.mcp` Keychain service. Unresolvable refs are left as-is so pre-existing files
+    /// that happen to contain `${...}` strings keep working unchanged.
+    static func expandLegacyEnv(_ config: MCPServerConfig, secrets: [String: String]) -> MCPServerConfig {
+        guard let env = config.env else { return config }
+        var expanded: [String: String] = [:]
+        for (key, value) in env {
+            expanded[key] = (try? PluginReferences.expand(value, config: [:], secrets: secrets)) ?? value
+        }
+        return MCPServerConfig(command: config.command, args: config.args, env: expanded)
+    }
+
+    /// Plugin keys are already namespaced `<plugin-id>.<server>`, so a straight merge cannot
+    /// collide with legacy names; legacy wins if a collision is somehow constructed.
+    static func mergeConfigs(legacy: [String: MCPServerConfig],
+                             plugin: [String: MCPServerConfig]) -> [String: MCPServerConfig] {
+        var merged = plugin
+        for (k, v) in legacy { merged[k] = v }
+        return merged
     }
 }
