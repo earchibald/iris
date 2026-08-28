@@ -81,7 +81,7 @@ the Swift struct exactly.
 
 All three are optional and independent — a plugin may declare only `mcp`,
 only `skills`, only `rules`, or any combination. Iris reads component keys
-it recognizes and ignores unknown keys with a warning, so an IPF 1.0 reader
+it recognizes and ignores unknown keys silently, so an IPF 1.0 reader
 survives a manifest written against a later 1.x minor that adds a new
 component kind.
 
@@ -147,10 +147,18 @@ failing it. See "Readiness semantics" below.
 
 ### `mcp` — MCP servers
 
-`components.mcp` points at a JSON file in the standard `mcpServers` shape:
-a top-level object (or an object under an `mcpServers` key) mapping server
-name to `{ command, args, env }`. Iris supports **stdio transport only** in
-this release; there is no HTTP or streamable-HTTP transport.
+`components.mcp` points at a JSON file in the **bare server-object shape**
+only: a top-level object mapping server name to `{ command, args, env }`.
+This is the required on-disk format. Iris supports **stdio transport only**
+in this release; there is no HTTP or streamable-HTTP transport.
+
+**Warning:** An `mcp.json` file wrapped in a `{"mcpServers": {...}}` object
+will load zero servers silently while the plugin still shows a green status.
+The bare form is required.
+
+The install wizard's *From MCP Snippet* flow accepts `mcpServers`-wrapped
+JSON as a convenience — you can paste an `mcpServers` block directly — and
+generates the bare form into the plugin's `mcp.json` file.
 
 Env values may use `${keychain:KEY}` and `${config:KEY}` references, which
 resolve immediately before the server process launches. Literal string
@@ -213,10 +221,9 @@ special syntax — they are read verbatim.
 ### Unknown component keys
 
 A `components` block may contain keys this Iris version does not
-recognize. Unknown keys are ignored, and a warning is surfaced, rather
-than failing the plugin. This lets an older Iris load a manifest written
-against a newer IPF 1.x minor that introduced an additional component
-kind.
+recognize. Unknown keys are ignored silently, rather than failing the
+plugin. This lets an older Iris load a manifest written against a newer
+IPF 1.x minor that introduced an additional component kind.
 
 ## Configuration model
 
