@@ -1,0 +1,53 @@
+import Foundation
+
+/// Resolves MCP server commands to absolute executable paths. GUI apps do not inherit the
+/// user's shell PATH, so a bare command like `notebooklm-mcp` is resolved against the login
+/// shell's PATH (captured once per launch) plus the common install locations. Iris never
+/// installs runtimes itself.
+enum BinaryResolver {
+    /// Login-shell PATH entries, captured once. Falls back to empty on any failure.
+    private static let loginShellPath: [String] = {
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: shell)
+        process.arguments = ["-lc", "echo $PATH"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            guard let output = String(data: data, encoding: .utf8) else { return [] }
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+                .components(separatedBy: ":").filter { !$0.isEmpty }
+        } catch {
+            return []
+        }
+    }()
+
+    static func defaultSearchDirs() -> [String] {
+        let common = ["~/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+            .map { ($0 as NSString).expandingTildeInPath }
+        var seen: Set<String> = []
+        return (loginShellPath + common).filter { seen.insert($0).inserted }
+    }
+
+    /// Resolution order: valid pin > absolute/relative path as given > search dirs.
+    static func resolve(command: String, pinned: String? = nil, searchDirs: [String]? = nil) -> String? {
+        let fm = FileManager.default
+        if let pinned {
+            let pin = (pinned as NSString).expandingTildeInPath
+            if fm.isExecutableFile(atPath: pin) { return pin }
+        }
+        let expanded = (command as NSString).expandingTildeInPath
+        if expanded.contains("/") {
+            return fm.isExecutableFile(atPath: expanded) ? expanded : nil
+        }
+        for dir in searchDirs ?? defaultSearchDirs() {
+            let candidate = "\(dir)/\(expanded)"
+            if fm.isExecutableFile(atPath: candidate) { return candidate }
+        }
+        return nil
+    }
+}
