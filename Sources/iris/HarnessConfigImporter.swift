@@ -29,12 +29,16 @@ struct HarnessConfigImporter {
     /// Extracts the `mcpServers` object (top-level or nested among other settings) and
     /// returns each server's raw dict. Servers without a string `command` are skipped
     /// (remote/HTTP servers are out of scope in v1).
+    ///
+    /// Files without an `mcpServers` wrapper — like Iris's own `mcp_servers.json`, which is a
+    /// bare `{ "name": { "command": ... } }` map — are treated as the server map itself; the
+    /// command-is-String filter below naturally skips any non-server keys in such files.
     static func servers(at url: URL) throws -> [String: [String: Any]] {
         let data = try Data(contentsOf: url)
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw IPFError.yamlError("\(url.lastPathComponent) is not a JSON object")
+            throw IPFError.invalidJSON("\(url.lastPathComponent) is not a JSON object")
         }
-        let dict = (root["mcpServers"] as? [String: Any]) ?? [:]
+        let dict = (root["mcpServers"] as? [String: Any]) ?? root
         var result: [String: [String: Any]] = [:]
         for (name, any) in dict {
             guard let server = any as? [String: Any], server["command"] is String else { continue }

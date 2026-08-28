@@ -36,6 +36,19 @@ struct AgentSkillValidatorTests {
         #expect((AgentSkillValidator.validateName(name) == nil) == ok)
     }
 
+    @Test("CRLF-encoded SKILL.md validates")
+    func crlf() throws {
+        let content = """
+        ---
+        name: pdf-processing
+        description: Extract PDF text and tables. Use when handling PDFs.
+        ---
+        Instructions here.
+        """.replacingOccurrences(of: "\n", with: "\r\n")
+        let dir = try makeSkill(dirName: "pdf-processing", skillMD: content)
+        #expect(AgentSkillValidator.validate(directory: dir).isEmpty)
+    }
+
     @Test("missing SKILL.md is a violation")
     func missingFile() throws {
         let dir = try makeSkill(dirName: "no-skill", skillMD: nil)

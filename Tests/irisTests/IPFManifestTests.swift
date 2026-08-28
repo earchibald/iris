@@ -81,6 +81,14 @@ struct IPFManifestTests {
         }
     }
 
+    @Test("parses a CRLF-encoded manifest")
+    func crlf() throws {
+        let doc = valid.replacingOccurrences(of: "\n", with: "\r\n")
+        let m = try IPFManifest.parse(markdown: doc, directoryName: "gemini-notebook")
+        #expect(m.id == "gemini-notebook")
+        #expect(m.version == "1.2.0")
+    }
+
     @Test("accepts 1.x minor versions")
     func minorOK() throws {
         let doc = "---\nipf: \"1.3\"\nid: ok\nname: X\nversion: 1.0.0\n---\n"

@@ -5,6 +5,7 @@ import Yams
 enum IPFError: Error, Equatable, CustomStringConvertible {
     case missingFrontmatter
     case yamlError(String)
+    case invalidJSON(String)
     case unsupportedVersion(String)
     case invalidID(String)
     case idMismatch(manifest: String, directory: String)
@@ -15,6 +16,7 @@ enum IPFError: Error, Equatable, CustomStringConvertible {
         switch self {
         case .missingFrontmatter: return "plugin.md has no YAML frontmatter block"
         case .yamlError(let e): return "Invalid YAML frontmatter: \(e)"
+        case .invalidJSON(let e): return "Invalid JSON: \(e)"
         case .unsupportedVersion(let v): return "Manifest declares ipf \(v); this Iris supports 1.x. Update Iris."
         case .invalidID(let id): return "Invalid plugin id '\(id)': lowercase letters, digits, single hyphens only"
         case .idMismatch(let m, let d): return "Manifest id '\(m)' does not match directory name '\(d)'"
@@ -101,11 +103,13 @@ struct IPFManifest: Codable, Sendable, Equatable {
     /// Parses `plugin.md` content. `directoryName` is the plugin folder name; it must equal `id`.
     static func parse(markdown: String, directoryName: String) throws -> IPFManifest {
         let lines = markdown.components(separatedBy: "\n")
-        guard lines.first?.trimmingCharacters(in: .whitespaces) == "---" else {
+        // `.whitespacesAndNewlines` so a stray `\r` on CRLF-encoded files does not hide the
+        // `---` delimiters.
+        guard lines.first?.trimmingCharacters(in: .whitespacesAndNewlines) == "---" else {
             throw IPFError.missingFrontmatter
         }
         guard let closeIndex = lines.dropFirst().firstIndex(where: {
-            $0.trimmingCharacters(in: .whitespaces) == "---"
+            $0.trimmingCharacters(in: .whitespacesAndNewlines) == "---"
         }) else {
             throw IPFError.missingFrontmatter
         }

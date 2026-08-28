@@ -28,8 +28,10 @@ enum AgentSkillValidator {
         }
 
         let lines = content.components(separatedBy: "\n")
-        guard lines.first?.trimmingCharacters(in: .whitespaces) == "---",
-              let close = lines.dropFirst().firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "---" }) else {
+        // `.whitespacesAndNewlines` so a stray `\r` on CRLF-encoded files does not hide the
+        // `---` delimiters.
+        guard lines.first?.trimmingCharacters(in: .whitespacesAndNewlines) == "---",
+              let close = lines.dropFirst().firstIndex(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines) == "---" }) else {
             return ["\(directory.lastPathComponent): SKILL.md has no YAML frontmatter"]
         }
         let yaml = lines[1..<close].joined(separator: "\n")
