@@ -206,6 +206,9 @@ relative to the skill root (level 3). Skill scripts run through the same
 `run_command` sandboxing and Vibecop evaluation as any other command —
 plugins get no execution bypass.
 
+When a plugin skill's name collides with a built-in skill's name, both
+appear in skill discovery, but the built-in skill wins for body lookup.
+
 `allowed-tools` is experimental in the Agent Skills spec. IPF 1.0 parses
 and displays it in the plugin detail pane but does not auto-approve
 anything; wiring it to the permission system is future work.
@@ -255,9 +258,13 @@ Iris's job is only to trigger and observe, not to hold secrets.
 | `help` | Explanatory text shown near the Sign in button. |
 
 Both `setup_command` and `check_command` may use `${config:KEY}`
-references (for example, to pass a per-profile name), and pass through the
-same permission/Vibecop gate as any other command Iris runs. A plugin
-using `auth` gets no execution privilege beyond what any tool command has.
+references (for example, to pass a per-profile name). Their execution
+paths differ: `setup_command` runs through `run_command`, so it passes the
+same permission/Vibecop gate as any other command Iris runs;
+`check_command` executes directly via `/bin/sh` with no gate. Both
+commands are displayed to the user at install time, in the wizard's
+Configuration step. `check_command` also runs automatically whenever the
+plugin's settings pane is shown, to refresh the status row.
 
 This model covers three real cases: a plain API-key server (`secrets`
 only, no `auth`), a tool with only external browser-based sign-in (`auth`

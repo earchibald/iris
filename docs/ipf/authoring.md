@@ -92,12 +92,12 @@ name.
 1. Put the two files above in a folder named `postgres-tools` (the folder
    name must equal the manifest's `id`).
 2. Open Iris → Settings → Plugins → **+ → From Folder…**.
-3. Turn on the "develop in place" toggle if you want to keep editing the
-   files after install — this symlinks the folder instead of copying it,
-   and adds a Reload button in the detail pane.
-4. Pick the folder. The install wizard validates the manifest, checks for
-   the `postgres-mcp` binary, and — because `DATABASE_URL` is a required
-   secret — prompts you for it before the Confirm step.
+3. Pick the folder. The install wizard validates the manifest, checks for
+   the `postgres-mcp` binary, and — because `DATABASE_URL` is a declared
+   secret — shows a masked field for it in the Configuration step.
+4. Iris copies the folder on install. To pick up later edits to the
+   source files, reinstall the folder (**+ → From Folder…** again) —
+   installs of the same `id` replace the previous copy.
 5. After confirming, find `postgres-tools` in the Plugins list. The status
    LED is:
    - **Orange** (needs configuration) if the binary is missing or the
@@ -192,13 +192,13 @@ handled entirely by the `auth` block and `nlm`'s own credential store.
 
 1. Put the two files above in a folder named `gemini-notebook`.
 2. Settings → Plugins → **+ → From Folder…**, pick the folder.
-3. The wizard checks for the `notebooklm-mcp` binary, shows the two
-   `config` fields (base URL, profile — profile pre-filled with
-   `default`), then reaches an **auth sign-in step** before Confirm,
-   showing the `auth` block's `label` and `help` text.
-4. You can sign in during the wizard, or skip it and sign in later from
-   the detail pane — either way, nothing is written until you press
-   Confirm.
+3. The wizard checks for the `notebooklm-mcp` binary, then shows the two
+   `config` fields in the Configuration step (base URL, profile — profile
+   pre-filled with its `default`).
+4. The Configuration step also **displays** the `auth` block's label and
+   its `setup_command`/`check_command` so you can see what will run — the
+   wizard never executes them. Sign-in happens after install, from the
+   plugin's detail pane. Nothing is written until you press Install.
 5. After install, the detail pane shows a status row driven by
    `check_command`. Orange with "not signed in" until you click **Sign
    in**; the subprocess output streams into the pane while `nlm` opens
