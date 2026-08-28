@@ -4,7 +4,7 @@ import Foundation
 /// major harness stores the same `mcpServers` JSON shape; only the file location differs.
 /// Iris never edits these files.
 struct HarnessConfigImporter {
-    struct DetectedHarness: Sendable, Equatable {
+    struct DetectedHarness: Sendable, Equatable, Hashable {
         let name: String
         let configPath: URL
     }

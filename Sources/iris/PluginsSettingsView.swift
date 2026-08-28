@@ -313,9 +313,3 @@ struct PluginDetailView: View {
         }
     }
 }
-
-struct PluginInstallWizardView: View {
-    let source: InstallWizardSource
-    let onComplete: () -> Void
-    var body: some View { Text("Install wizard").frame(width: 400, height: 200) }
-}
