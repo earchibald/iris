@@ -9,7 +9,7 @@ Iris gains a plugin system. A plugin is a directory that bundles MCP servers, sk
 
 | Decision | Choice |
 |---|---|
-| Bundle format | Own manifest (IPF, OKF-style); components in industry-standard formats (`mcpServers` JSON, SKILL.md-style skills, Markdown rules) |
+| Bundle format | Own manifest (IPF, OKF-style); components in industry-standard formats (`mcpServers` JSON, Agent Skills directories per the agentskills.io spec, Markdown rules) |
 | Architecture | Plugin registry (`PluginManager`) feeds existing subsystems; no new executors |
 | Legacy `mcp_servers.json` | Stays live and hand-editable; shown in the same UI; gains optional `${keychain:…}` syntax |
 | Secrets | Declared in manifest, collected by install wizard, stored in Keychain per-plugin |
@@ -23,7 +23,7 @@ Iris gains a plugin system. A plugin is a directory that bundles MCP servers, sk
 
 Users must be able to point Iris at an external MCP server — for example `gemini-notebook-mcp-cli` — and have it configure itself, with secrets in the Keychain and a clean Settings UI, without vendoring the server into the Iris repo. More broadly, Iris needs a plugin concept that bundles everything Iris supports (MCP, skills, rules), is compatible with industry text standards where they exist, and has a documented, independent lifecycle.
 
-No open standard exists for the bundle layer. MCP covers tools. SKILL.md covers skills. AGENTS.md covers project instructions. Claude Code plugins cover bundling, but they are Anthropic's product, lack a secrets/env model, and include components (hooks, agents, commands) that do not map to Iris. Therefore Iris owns the bundle manifest and reuses the standard formats for every component inside it.
+No open standard exists for the bundle layer. MCP covers tools. Agent Skills (SKILL.md plus bundled scripts/references/assets) covers skills. AGENTS.md covers project instructions. Claude Code plugins cover bundling, but they are Anthropic's product, lack a secrets/env model, and include components (hooks, agents, commands) that do not map to Iris. Therefore Iris owns the bundle manifest and reuses the standard formats for every component inside it.
 
 ## Architecture
 
@@ -43,7 +43,7 @@ No open standard exists for the bundle layer. MCP covers tools. SKILL.md covers 
   gemini-notebook/
     plugin.md          # IPF manifest: YAML frontmatter + Markdown docs body
     mcp.json           # standard mcpServers shape; ${keychain:…}/${config:…} refs
-    skills/            # optional; SKILL.md-compatible OKF files
+    skills/            # optional; Agent Skills directories (agentskills.io spec)
     rules/             # optional; plain Markdown rules
 ```
 
@@ -120,6 +120,29 @@ Human-readable docs, setup notes, links…
 
 This model covers the three real cases: plain API-key servers (`secrets` only), `nlm` consumer (external auth only), and `nlm` enterprise (`config` fields plus external auth under a different profile).
 
+### Skills component — full Agent Skills spec
+
+The `skills/` component contains one directory per skill, each conforming to the full Agent Skills specification (agentskills.io), not just a `SKILL.md` file:
+
+```
+skills/
+  pdf-processing/
+    SKILL.md           # required: YAML frontmatter + instructions
+    scripts/           # optional: executable code
+    references/        # optional: on-demand documentation
+    assets/            # optional: templates, data files
+```
+
+Requirements on Iris:
+
+- **Validation per spec.** At install and load: `name` rules (1–64 chars, lowercase alphanumeric + single hyphens, matches directory name), `description` present (1–1024 chars). Optional fields (`license`, `compatibility`, `metadata`, `allowed-tools`) parse without error. Spec violations fail install with the specific rule named.
+- **Progressive disclosure.** Level 1: name + description register with `SkillManager` at load. Level 2: the `SKILL.md` body loads on activation (existing behavior). Level 3: `scripts/`, `references/`, and `assets/` resolve via `read_file`/`run_command` with paths relative to the skill root — the whole skill directory, not just `SKILL.md`, must be reachable by the agent.
+- **Scripts run through existing gates.** Skill scripts execute via `run_command`, so they inherit sandboxing and Vibecop evaluation. Plugins get no execution bypass.
+- **`allowed-tools`** is experimental in the spec; v1 parses and displays it in the plugin detail pane but does not auto-approve. Wiring it to `PermissionManager` is future work.
+- **`compatibility`** is shown in the detail pane and checked loosely: it is informational text, not machine-enforced.
+
+Iris's existing `~/.iris/memory/skills/` layout is already directory-per-skill with `SKILL.md`, so plugin skills register through the same `SkillManager` path; the plugin variant adds spec validation and keeps skill directories under the plugin root (registered by reference, not copied into the shared skills dir — uninstall stays a directory delete).
+
 ## MCP integration & secret resolution
 
 `MCPManager` changes are deliberately small:
@@ -193,7 +216,7 @@ A broken plugin never breaks Iris or other plugins.
 
 ## Testing
 
-**Unit tests:** manifest parsing and validation; reference expansion (`${keychain:}`, `${config:}`); secret-classification heuristics; harness-config parsers with fixture files per harness; namespacing and collision rules; cross-validation of secrets vs. `mcp.json` references.
+**Unit tests:** manifest parsing and validation; reference expansion (`${keychain:}`, `${config:}`); secret-classification heuristics; harness-config parsers with fixture files per harness; namespacing and collision rules; cross-validation of secrets vs. `mcp.json` references; Agent Skills validation against the spec's name/description rules (valid and invalid fixture skills, including `scripts/`/`references/` resolution).
 
 **Integration test:** a trivial fixture MCP server (shell script speaking stdio JSON-RPC) exercised through install → start → tool call → uninstall.
 
