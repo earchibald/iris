@@ -29,6 +29,15 @@ struct BinaryResolverTests {
         #expect(BinaryResolver.resolve(command: "ls", pinned: "/nope/ls", searchDirs: ["/bin"]) == "/bin/ls")
     }
 
+    @Test("relative command with slash resolves to an absolute path")
+    func relativeCommand() {
+        let cwd = FileManager.default.currentDirectoryPath
+        FileManager.default.changeCurrentDirectoryPath("/")
+        defer { FileManager.default.changeCurrentDirectoryPath(cwd) }
+        let resolved = BinaryResolver.resolve(command: "bin/ls", pinned: nil, searchDirs: [])
+        #expect(resolved == "/bin/ls")
+    }
+
     @Test("default search dirs include the common install locations")
     func defaults() {
         let dirs = BinaryResolver.defaultSearchDirs()

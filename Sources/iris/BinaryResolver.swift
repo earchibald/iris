@@ -13,10 +13,14 @@ enum BinaryResolver {
         process.arguments = ["-lc", "echo $PATH"]
         let pipe = Pipe()
         process.standardOutput = pipe
-        process.standardError = Pipe()
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
         do {
             try process.run()
+            let timeout = DispatchWorkItem { process.terminate() }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 5, execute: timeout)
             process.waitUntilExit()
+            timeout.cancel()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             guard let output = String(data: data, encoding: .utf8) else { return [] }
             return output.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -42,7 +46,8 @@ enum BinaryResolver {
         }
         let expanded = (command as NSString).expandingTildeInPath
         if expanded.contains("/") {
-            return fm.isExecutableFile(atPath: expanded) ? expanded : nil
+            guard fm.isExecutableFile(atPath: expanded) else { return nil }
+            return URL(fileURLWithPath: expanded).standardizedFileURL.path
         }
         for dir in searchDirs ?? defaultSearchDirs() {
             let candidate = "\(dir)/\(expanded)"
