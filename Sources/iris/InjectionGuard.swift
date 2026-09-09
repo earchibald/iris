@@ -39,6 +39,13 @@ public struct InjectionGuard {
             return wrap(clean, source: source)
         }
 
+        // Headless `--bench` runs skip the model-backed tiers: the aux models aren't provisioned
+        // and would only add nondeterministic latency to a benchmark. Tier 1 structural
+        // sanitization still applies. In-process flag by design — see HeadlessMode.
+        if HeadlessMode.isEnabled {
+            return wrap(clean, source: source)
+        }
+
         // Tier 2: Local Token-Classification (CoreML/ONNX) — evaluates the unwrapped content.
         let isTier2Safe = await executeTier2CoreML(clean)
         if !isTier2Safe {
