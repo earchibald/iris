@@ -43,12 +43,11 @@ A plugin is a directory. Iris looks for it under `~/.iris/plugins/<id>/`.
 | `plugin.md` | The manifest. YAML frontmatter declares identity, components, and configuration needs. The Markdown body is human-readable documentation, rendered in the Settings detail pane. |
 | `mcp.json` | Standard `mcpServers` JSON. Declares the plugin's MCP server(s), stdio transport only. |
 | `skills/` | One directory per skill, each a full Agent Skills bundle (see "Components" below). |
-| `rules/` | Plain Markdown files. Each file is appended to the base system prompt, in filename order. |
+| `rules/` | Plain Markdown files. Each file is appended to the base system prompt, in filename order, after injection-guard sanitization. |
 
 A plugin directory is a pure, shareable artifact. It carries no machine-local
-state. Enable/disable flags, install source, installed version, pinned
-binary paths, and config values live outside the plugin, in
-`~/.iris/config/plugins.json`.
+state. Enable/disable flags, install source, installed version, and
+config values live outside the plugin, in `~/.iris/config/plugins.json`.
 
 ## Manifest schema
 
@@ -219,7 +218,20 @@ anything; wiring it to the permission system is future work.
 `components.rules` points at a directory of plain Markdown files. Every
 `.md` file in that directory (in filename order, hidden files excluded) is
 appended to the base system prompt. Rules carry no frontmatter and no
-special syntax — they are read verbatim.
+special syntax.
+
+Plugin rules are third-party content, so Iris treats them like a
+workspace `AGENTS.md` rather than like the user's own `~/.iris/rules/`:
+each file passes the prompt-injection guard (structural normalization,
+then the model-backed tiers when enabled) and is wrapped in an
+`<untrusted_context>` block before it reaches the prompt. Consequences
+for authors:
+
+- Role-delimiter strings (`system:`, `assistant:`, `user:`) and the
+  sequences `---` and `###` are stripped. Use `#` or `##` headings and
+  avoid horizontal rules.
+- If the model-backed tiers are enabled but no prompt-guard model can
+  load, the guard fails closed and the rule is blocked for that session.
 
 ### Unknown component keys
 
@@ -258,13 +270,21 @@ Iris's job is only to trigger and observe, not to hold secrets.
 | `help` | Explanatory text shown near the Sign in button. |
 
 Both `setup_command` and `check_command` may use `${config:KEY}`
-references (for example, to pass a per-profile name). Their execution
-paths differ: `setup_command` runs through `run_command`, so it passes the
-same permission/Vibecop gate as any other command Iris runs;
-`check_command` executes directly via `/bin/sh` with no gate. Both
-commands are displayed to the user at install time, in the wizard's
-Configuration step. `check_command` also runs automatically whenever the
-plugin's settings pane is shown, to refresh the status row.
+references (for example, to pass a per-profile name). Each `${config:KEY}`
+value is substituted as one single-quoted shell word, so do not wrap the
+reference in quotes yourself: write `--profile ${config:PROFILE}`, not
+`--profile "${config:PROFILE}"`. `${keychain:KEY}` references are not
+allowed in auth commands; a command that contains one is reported as
+unresolvable and never runs.
+
+Both commands pass the same permission gate as any other command Iris
+runs (persisted "always allow" rules, then Vibecop, then a user prompt)
+before they execute. `setup_command` then runs through `run_command`;
+`check_command` runs via `/bin/sh -c`. Both commands are displayed to the
+user at install time, in the wizard's Configuration step. `check_command`
+also runs whenever the plugin's settings pane is shown, to refresh the
+status row, so the first open may prompt for approval until the user
+chooses "Always allow".
 
 This model covers three real cases: a plain API-key server (`secrets`
 only, no `auth`), a tool with only external browser-based sign-in (`auth`

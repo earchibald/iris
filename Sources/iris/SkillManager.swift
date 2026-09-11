@@ -46,10 +46,15 @@ struct SkillManager {
         } else {
             pluginRules = await PluginManager.shared.ruleFiles()
         }
+        // Plugin rules are third-party content. Unlike the user's own ~/.iris/rules, they pass
+        // the same InjectionGuard path as workspace AGENTS.md before reaching the system prompt.
         for fileURL in pluginRules {
             if let content = try? String(contentsOf: fileURL, encoding: .utf8),
                !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                rulesContent += "\n\n# Rule (plugin): \(fileURL.lastPathComponent)\n\(content)\n"
+                let structuralSafe = PromptInjectionGuard.sanitizeUntrustedInput(content)
+                let safe = await InjectionGuard.sanitize(
+                    structuralSafe, contextTag: "plugin_rule_\(fileURL.lastPathComponent)", maxTier: .tier3_canary)
+                rulesContent += "\n\n# Rule (plugin): \(fileURL.lastPathComponent)\n\(safe)\n"
             }
         }
         return rulesContent

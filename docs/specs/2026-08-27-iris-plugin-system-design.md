@@ -47,7 +47,7 @@ No open standard exists for the bundle layer. MCP covers tools. Agent Skills (SK
     rules/             # optional; plain Markdown rules
 ```
 
-A plugin directory is a pure, shareable artifact. Machine-local state — enable/disable, install source, installed version, pinned binary paths, config values — lives in `~/.iris/config/plugins.json`.
+A plugin directory is a pure, shareable artifact. Machine-local state — enable/disable, install source, installed version, config values — lives in `~/.iris/config/plugins.json`.
 
 ### Startup data flow
 
@@ -116,7 +116,7 @@ Human-readable docs, setup notes, links…
 | `secrets` | Keychain, service `iris.plugin.<id>` | Wizard form; masked editable fields | `${keychain:KEY}` in `mcp.json` env |
 | `auth` (`kind: external`) | The tool's own store; Iris stores nothing | Status row (`check_command`, exit 0 = signed in) + Sign in button (`setup_command`) | None |
 
-`auth.setup_command` runs as a subprocess; the tool opens its own browser if it needs one. Iris streams output and re-runs the check afterward. Setup and check commands pass through the same Vibecop/permission gate as any tool command. A future `kind: oauth` (Iris-driven flow, like the existing Google Workspace loopback OAuth) fits without schema changes.
+`auth.setup_command` runs as a subprocess; the tool opens its own browser if it needs one. Iris streams output and re-runs the check afterward. Both `setup_command` and `check_command` come from an untrusted manifest, so `PluginAuthRunner` routes each through `AppState.requestApproval` (PermissionManager fast path, then Vibecop, then the user prompt) before it executes — the same gate an agent-issued `run_command` gets. `ToolExecutor` applies no gate on its own, so the runner calls the gate explicitly. `${config:KEY}` values are shell-quoted as single words before substitution; `${keychain:KEY}` references are never resolved in auth commands. A future `kind: oauth` (Iris-driven flow, like the existing Google Workspace loopback OAuth) fits without schema changes.
 
 This model covers the three real cases: plain API-key servers (`secrets` only), `nlm` consumer (external auth only), and `nlm` enterprise (`config` fields plus external auth under a different profile).
 
@@ -151,8 +151,8 @@ Iris's existing `~/.iris/memory/skills/` layout is already directory-per-skill w
 - **Resolution at launch, in memory only.** Resolved secrets never reach disk or logs.
 - **Same syntax in the legacy file.** `mcp_servers.json` env values may use `${keychain:KEY}`, resolved against shared service `iris.mcp`. Plain string values keep working unchanged.
 - **Per-server status.** A status enum per server — running / stopped / failed(reason) / needs-config — observable by the Settings UI. Per-plugin start/stop, so a plugin toggle does not restart unrelated servers.
-- **Binary resolution.** Commands resolve against an augmented PATH: captured once per app launch from a login shell, plus `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`. A user-pinned absolute path in `plugins.json` overrides. Failure surfaces the manifest's `install_hint`. Iris never installs runtimes.
-- **Trust boundary unchanged.** Plugin-provided tool descriptions pass through the same `InjectionGuard` sanitization as the current MCP path. Plugins get no bypass.
+- **Binary resolution.** Commands resolve against an augmented PATH: captured once per app launch from a login shell, plus `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`. Failure surfaces the manifest's `install_hint`. Iris never installs runtimes.
+- **Trust boundary unchanged.** Plugin-provided tool descriptions pass through the same `InjectionGuard` sanitization as the current MCP path. Plugin `rules/` files pass through the same guard as workspace `AGENTS.md` (`PromptInjectionGuard` structural pass, then `InjectionGuard` up to tier 3) before they reach the system prompt; only the user's own `~/.iris/rules/` are appended unguarded. Plugins get no bypass.
 
 ## Install flows
 
@@ -180,7 +180,7 @@ A new **Plugins** tab in the existing Settings window, list plus detail.
 
 - Header: name, version, author, homepage link, install source.
 - Configuration: `config` text fields, `secrets` masked fields, `auth` status rows with Sign in buttons.
-- Servers & tools: each MCP server with status, resolved binary path (pinnable), expandable tool list; skills and rules listed read-only with file links.
+- Servers & tools: each MCP server with status, resolved binary path, expandable tool list; skills and rules listed read-only with file links.
 - Footer actions: *Check for Updates* (git-sourced, later), *Reveal in Finder*, *Reload* (dev-mode installs), *Uninstall*.
 - The manifest's Markdown body renders at the bottom via `swift-markdown-ui`.
 
