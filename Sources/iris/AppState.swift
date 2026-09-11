@@ -141,6 +141,13 @@ class AppState {
     /// Read-only for observers. Ownership is centralized through `beginThinking()`/`endThinking()`
     /// so overlapping turns (concurrent sends, subagents, auto-reprompt) can't leave it stuck.
     private(set) var isThinking = false
+    /// Transient, per-instance: when set, `requestApproval` auto-approves every tool without
+    /// consulting permissions/Vibecop or enqueuing an interactive prompt. Set only by headless
+    /// drivers (ScenarioRunner) on their own throwaway AppState — never by the shipping app —
+    /// so scenario runs are deterministic and never block on a human. Not persisted.
+    var autoApproveTools = false
+    var commandStartTimes: [UUID: Date] = [:]
+    var commandDurations: [UUID: TimeInterval] = [:]
     var activeSubagents: [ActiveSubagent] = []
     var subagentWriteLedger: [UUID: [String]] = [:]
     var pendingApprovals: [ToolApprovalRequest] = []
@@ -581,9 +588,9 @@ class AppState {
         appendMessage(role: role, content: text, to: conversationId)
     }
 
-    func appendMessage(role: ChatRole, content: String, attachments: [FileAttachment] = [], to conversationId: UUID) {
+    func appendMessage(role: ChatRole, content: String, attachments: [FileAttachment] = [], id: UUID = UUID(), to conversationId: UUID) {
         if let idx = conversations.firstIndex(where: { $0.id == conversationId }) {
-            conversations[idx].messages.append(ChatMessage(role: role, content: content, attachments: attachments))
+            conversations[idx].messages.append(ChatMessage(id: id, role: role, content: content, attachments: attachments))
             
             // Auto-title generation based on first message
             if role == .user && conversations[idx].messages.filter({ $0.role == .user }).count == 1 {
@@ -826,6 +833,8 @@ class AppState {
                          conversationId: UUID? = nil, origin: String = "Main agent",
                          inSandbox: Bool = false, callerRole: VibecopCallerRole = .agent,
                          allowedCommands: [String] = []) async -> Bool {
+        // Headless drivers auto-approve so a scenario run never blocks on a human or a local model.
+        if autoApproveTools { return true }
         // Fast path: deterministic permissions.
         if PermissionManager.shared.isAllowed(toolName: toolName, details: details, workspace: workspace) {
             return true
