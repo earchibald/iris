@@ -28,7 +28,6 @@ struct PluginStateTests {
         state.enabled = false
         state.installedVersion = "1.2.0"
         state.configValues["NLM_PROFILE"] = "work"
-        state.pinnedBinaries["gemini-notebook"] = "/opt/homebrew/bin/notebooklm-mcp"
         store.save(["gemini-notebook": state])
 
         let loaded = store.load()

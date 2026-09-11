@@ -37,13 +37,9 @@ enum BinaryResolver {
         return (loginShellPath + common).filter { seen.insert($0).inserted }
     }
 
-    /// Resolution order: valid pin > absolute/relative path as given > search dirs.
-    static func resolve(command: String, pinned: String? = nil, searchDirs: [String]? = nil) -> String? {
+    /// Resolution order: absolute/relative path as given > search dirs.
+    static func resolve(command: String, searchDirs: [String]? = nil) -> String? {
         let fm = FileManager.default
-        if let pinned {
-            let pin = (pinned as NSString).expandingTildeInPath
-            if fm.isExecutableFile(atPath: pin) { return pin }
-        }
         let expanded = (command as NSString).expandingTildeInPath
         if expanded.contains("/") {
             guard fm.isExecutableFile(atPath: expanded) else { return nil }

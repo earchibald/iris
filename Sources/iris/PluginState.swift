@@ -7,7 +7,6 @@ struct PluginState: Codable, Sendable, Equatable {
     var source: String = "local"           // "local" | "snippet" | "import:<harness>" | "dev"
     var installedVersion: String?
     var configValues: [String: String] = [:]
-    var pinnedBinaries: [String: String] = [:]   // server name -> absolute path
 
     init(enabled: Bool = true, source: String = "local") {
         self.enabled = enabled

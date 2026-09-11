@@ -176,7 +176,7 @@ actor PluginManager {
             }
         }
         for binary in manifest.requires?.binaries ?? [] {
-            if BinaryResolver.resolve(command: binary.name, pinned: state.pinnedBinaries[binary.name]) == nil {
+            if BinaryResolver.resolve(command: binary.name) == nil {
                 let hint = binary.installHint.map { " — install with: \($0)" } ?? ""
                 return .needsConfig("Binary '\(binary.name)' not found\(hint)")
             }
@@ -212,8 +212,7 @@ actor PluginManager {
 
     private func resolveServer(_ server: MCPServerConfig, plugin: LoadedPlugin, serverName: String,
                                config: [String: String], secrets: [String: String]) -> MCPServerConfig? {
-        guard let command = BinaryResolver.resolve(
-            command: server.command, pinned: plugin.state.pinnedBinaries[serverName]) else { return nil }
+        guard let command = BinaryResolver.resolve(command: server.command) else { return nil }
         var env: [String: String]? = nil
         if let rawEnv = server.env {
             var expanded: [String: String] = [:]
